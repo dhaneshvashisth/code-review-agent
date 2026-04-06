@@ -1,34 +1,45 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, VARCHAR
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base
+import enum
+from sqlalchemy import Enum
 
 
+class ReviewStatus(enum.Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+class AgentStatus(enum.Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+
+    
 Base = declarative_base()
-class ReviewRequest():
+class ReviewRequest(Base):
     __tablename__ = "review_requests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     code_text  = Column(Text,nullable=False)
     code_hash  = Column(String(64), index= True, nullable= False)
     language   = Column(String(50), nullable=True)
-    status   = Column(String(20), default="pending", nullable=False)
-    created_at   = Column(DateTime, default= datetime.now(timezone.utc))
+    status   = Column(Enum(ReviewStatus), default=ReviewStatus.PENDING, nullable=False)
+    created_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable= False)
 
     
-class AgentOutputs():
+class AgentOutputs(Base):
     __tablename__ = "agent_outputs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     review_id  = Column(UUID(as_uuid=True), ForeignKey("review_requests.id"))
-    agent_name  = Column(VARCHAR(50))
+    agent_name  = Column(String(50), nullable= False)
     output   = Column(JSONB)
-    status   = Column(VARCHAR(20), default="success", nullable=False)
-    error_message   = Column(Text(20), nullable=True)
-    created_at   = Column(DateTime, default= datetime.now(timezone.utc))
+    status = Column(Enum(AgentStatus), default=AgentStatus.SUCCESS, nullable=False)
+    error_message   = Column(Text, nullable=True)
+    created_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable= False)
 
-class FinalReports():
+class FinalReports(Base):
     __tablename__ = "final_reports"
 
 
@@ -39,17 +50,17 @@ class FinalReports():
     critical_issues   = Column(Integer, nullable=False)
     warnings   = Column(Integer, nullable=False)
     report_json   =Column(JSONB)
-    created_at   = Column(DateTime, default= datetime.now(timezone.utc))
+    created_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable= False)
 
     
 
-class ErrorLogs():
+class ErrorLogs(Base):
     __tablename__ = "error_logs"
 
-    id = Column(Integer, primary_key=True, unique=True, index=True)
-    review_id  = Column(UUID(as_uuid=True), ForeignKey("review_requests.id"))
-    agent_name  =  Column(VARCHAR(50))
-    error_type   = Column(VARCHAR(100))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    review_id  = Column(UUID(as_uuid=True), ForeignKey("review_requests.id"), nullable=True)
+    agent_name  =  Column(String(50))
+    error_type   = Column(String(100))
     error_message   = Column(Text)
-    created_at   = Column(DateTime, default= datetime.now(timezone.utc))
+    created_at   = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable= False)
 
