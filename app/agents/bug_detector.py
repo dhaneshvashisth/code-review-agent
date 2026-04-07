@@ -1,5 +1,6 @@
 from app.graph.state import ReviewState
-from app.core.llm import llm
+from app.core.exceptions import LLMException
+from app.core.llm import llm, call_llm_with_retry
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langchain_core.messages import HumanMessage, SystemMessage
 import json
@@ -30,33 +31,34 @@ SYSTEM_PROMPT = """You are an expert code reviewer specializing in bug detection
                 If no bugs found, return: {"findings": []}"""
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10)
-)
+# @retry(
+#     stop=stop_after_attempt(3),
+#     wait=wait_exponential(multiplier=1, min=2, max=10)
+# )
 
 
-def _call_llm(code: str, language: str) -> dict:
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"Language: {language or 'unknown'}\n\nCode:\n{code}")
-    ]
-    response = llm.invoke(messages)
-    raw = response.content.strip()
+# def _call_llm(code: str, language: str) -> dict:
+#     messages = [
+#         SystemMessage(content=SYSTEM_PROMPT),
+#         HumanMessage(content=f"Language: {language or 'unknown'}\n\nCode:\n{code}")
+#     ]
+#     response = llm.invoke(messages)
+#     raw = response.content.strip()
 
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+#     if raw.startswith("```"):
+#         raw = raw.split("```")[1]
+#         if raw.startswith("json"):
+#             raw = raw[4:]
+#     raw = raw.strip()
 
-    return json.loads(raw)
+#     return json.loads(raw)
 
 
 def bug_detection_node(state: ReviewState) -> dict:
     logger.info(f"Bug detector running for review_id: {state['review_id']}")
     try:
-        result = _call_llm(state["code"], state.get("language"))
+        user_content = f"Language: {state.get('language') or 'unknown'}\n\nCode:\n{state['code']}"
+        result = call_llm_with_retry(SYSTEM_PROMPT, user_content, "bug_detector")
         findings = result.get("findings", [])
         logger.info(f"Bug detector found {len(findings)} issues")
         return {
@@ -66,9 +68,19 @@ def bug_detection_node(state: ReviewState) -> dict:
                 "error" : None
             }
         }
+    
+    except LLMException as e:
+        logger.error(f"Bug detector LLM failed after retries: {e.message}")
+        return {
+            "bug_detection_result": {
+                "status": "failed",
+                "findings": [],
+                "error": e.message
+            }
+        }
        
     except Exception as e:
-        logger.error(f"Bug detector failed: {e}")
+        logger.error(f"Bug detector unexpected error: {e}")
         return {
             
             "bug_detection_result": {

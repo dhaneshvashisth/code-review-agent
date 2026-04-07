@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-
 @router.post("/review", response_model=ReviewResponse)
 async def create_review(request: ReviewRequest, db: AsyncSession = Depends(get_db)):
     review_id = str(uuid.uuid4())

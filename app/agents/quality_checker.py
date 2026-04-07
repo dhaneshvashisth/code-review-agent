@@ -1,5 +1,7 @@
 from app.graph.state import ReviewState
 from app.core.llm import llm
+from app.core.exceptions import LLMException
+from app.core.llm import llm, call_llm_with_retry
 import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -33,27 +35,27 @@ SYSTEM_PROMPT = """You are an expert code reviewer specializing in code quality.
 
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10)
-)
+# @retry(
+#     stop=stop_after_attempt(3),
+#     wait=wait_exponential(multiplier=1, min=2, max=10)
+# )
 
 
-def _call_llm(code: str, language: str) -> dict:
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"Language: {language or 'unknown'}\n\nCode:\n{code}")
-    ]
-    response = llm.invoke(messages)
-    raw = response.content.strip()
+# def _call_llm(code: str, language: str) -> dict:
+#     messages = [
+#         SystemMessage(content=SYSTEM_PROMPT),
+#         HumanMessage(content=f"Language: {language or 'unknown'}\n\nCode:\n{code}")
+#     ]
+#     response = llm.invoke(messages)
+#     raw = response.content.strip()
 
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+#     if raw.startswith("```"):
+#         raw = raw.split("```")[1]
+#         if raw.startswith("json"):
+#             raw = raw[4:]
+#     raw = raw.strip()
 
-    return json.loads(raw)
+#     return json.loads(raw)
 
 
 
@@ -61,7 +63,8 @@ def _call_llm(code: str, language: str) -> dict:
 def quality_check_node(state: ReviewState) -> dict:
     logger.info(f"Quality checker running for review_id: {state['review_id']}")
     try:
-        result = _call_llm(state["code"], state.get("language"))
+        user_content = f"Language: {state.get('language') or 'unknown'}\n\nCode:\n{state['code']}"
+        result = call_llm_with_retry(SYSTEM_PROMPT, user_content, "quality_checker")
         findings = result.get("findings", [])
         logger.info(f"Quality Checker found {len(findings)} issues")
         return {
@@ -72,6 +75,16 @@ def quality_check_node(state: ReviewState) -> dict:
 
             }
 
+        }
+    
+    except LLMException as e:
+        logger.error(f"Quality Checker LLM failed after retries: {e.message}")
+        return {
+            "quality_check_result": {
+                "status": "failed",
+                "findings": [],
+                "error": e.message
+            }
         }
             
     except Exception as e:

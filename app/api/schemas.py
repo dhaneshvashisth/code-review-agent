@@ -1,9 +1,31 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, Any
+
+
+SUPPORTED_LANGUAGES = [
+    "python", "javascript", "typescript", "java", "go",
+    "rust", "cpp", "c", "csharp", "ruby", "php", "swift"
+]
 
 class ReviewRequest(BaseModel):
     code : str
     language : Optional[str] = None
+
+    @field_validator("code")
+    @classmethod
+    def code_must_not_be_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError("Code cannot be empty")
+        if len(v) > 10000:
+            raise ValueError("Code exceeds maximum length of 10000 characters")
+        return v
+
+    @field_validator("language")
+    @classmethod
+    def language_must_be_valid(cls, v):
+        if v and v.lower() not in SUPPORTED_LANGUAGES:
+            raise ValueError(f"Unsupported language. Supported: {', '.join(SUPPORTED_LANGUAGES)}")
+        return v.lower() if v else v
 
 class ReviewResponse(BaseModel):
     status : str

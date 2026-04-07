@@ -1,6 +1,7 @@
 from app.graph.state import ReviewState
 import logging
-from app.core.llm import llm
+from app.core.llm import llm , call_llm_with_retry
+from app.core.exceptions import LLMException
 import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -35,53 +36,87 @@ def _calculate_score(all_findings: list) -> int:
             score -= 1
     return max(0, score)
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10)
-)
-def _call_llm(all_findings: list) -> dict:
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=f"Findings:\n{json.dumps(all_findings, indent=2)}")
+
+def _get_failed_agents(state: ReviewState) -> list:
+    failed = []
+    checks = [
+        ("bug_detector", "bug_detection_result"),
+        ("quality_checker", "quality_check_result"),
+        ("security_checker", "security_check_result")
     ]
-    response = llm.invoke(messages)
-    raw = response.content.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
+    for agent_name, key in checks:
+        result = state.get(key)
+        if not result or result.get("status") == "failed":
+            failed.append(agent_name)
+    return failed
+
+def _collect_findings(state: ReviewState) -> list:
+    all_findings = []
+    for key in ["bug_detection_result", "quality_check_result", "security_check_result"]:
+        result = state.get(key)
+        if result and result.get("findings"):
+            all_findings.extend(result["findings"])
+    return all_findings
+
+# @retry(
+#     stop=stop_after_attempt(3),
+#     wait=wait_exponential(multiplier=1, min=2, max=10)
+# )
+# def _call_llm(all_findings: list) -> dict:
+#     messages = [
+#         SystemMessage(content=SYSTEM_PROMPT),
+#         HumanMessage(content=f"Findings:\n{json.dumps(all_findings, indent=2)}")
+#     ]
+#     response = llm.invoke(messages)
+#     raw = response.content.strip()
+#     if raw.startswith("```"):
+#         raw = raw.split("```")[1]
+#         if raw.startswith("json"):
+#             raw = raw[4:]
+#     return json.loads(raw.strip())
 
 
 
 def summarizer_node(state: ReviewState) -> dict:
     logger.info(f"Summarizer running for review_id: {state['review_id']}")
 
-    bug_result = state.get("bug_detection_result")
-    quality_result = state.get("quality_check_result")
-    security_result = state.get("security_check_result")
+    failed_agents = _get_failed_agents(state)
 
-    failed_agents = [
-        name for name, result in [
-            ("bug_detector", bug_result),
-            ("quality_checker", quality_result),
-            ("security_checker", security_result)
-        ]
-        if result and result.get("status") == "failed"
-    ]
-
-    all_findings = []
-    for result in [bug_result, quality_result, security_result]:
-        if result and result.get("findings"):
-            all_findings.extend(result["findings"])
+    all_findings = _collect_findings(state)
 
     critical_count = sum(1 for f in all_findings if f.get("severity") == "critical")
     warning_count = sum(1 for f in all_findings if f.get("severity") == "warning")
     score = _calculate_score(all_findings)
 
+    if len(failed_agents) == 3:
+        logger.error("All agents has been failed — returning minimal report")
+
+        return {
+            "final_report": {
+                "overall_score": 0,
+                "total_findings": 0,
+                "critical_issues": 0,
+                "warnings": 0,
+                "findings": [],
+                "failed_agents": failed_agents,
+                "summary": "Review failed — all agents encountered errors. Please try again.",
+                "partial_review": True
+            }
+        }
+
     try:
-        llm_result = _call_llm(all_findings)
-        summary = llm_result.get("summary", "Review completed.")
+        user_content = f"Findings ({len(all_findings)} total):\n"
+        if failed_agents:
+            user_content += f"Note: {', '.join(failed_agents)} failed and provided no findings.\n"
+        import json
+        user_content += json.dumps(all_findings, indent=2)
+
+        result = call_llm_with_retry(SYSTEM_PROMPT, user_content, "summarizer")
+        summary = result.get("summary", "Review completed.")
+
+    except LLMException as e:
+        logger.error(f"Summarizer LLM failed: {e.message}")
+        summary = f"Review completed with {len(all_findings)} findings. Summary generation failed."
     except Exception as e:
         logger.error(f"Summarizer LLM failed: {e}")
         summary = f"Review completed with {len(all_findings)} findings. Summary generation failed."
