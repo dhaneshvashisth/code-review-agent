@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
-from app.api.schemas import ReviewRequest, ReviewResponse, ReviewHistoryItem
+from app.api.schemas import ReviewRequest, ReviewResponse, ReviewHistoryItem, HistoryResponse
 from app.db.crud import (
     hash_code, get_cached_review, create_review_request,
     save_agent_output, save_final_report, update_review_status,
-    log_error, get_review_by_id, get_review_history
+    log_error, get_review_by_id, get_review_history, get_review_history_count
 )
 from app.graph.graph import review_graph
 import logging
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/review", response_model=ReviewResponse)
+@router.post("/review", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)
 async def create_review(request: ReviewRequest, db: AsyncSession = Depends(get_db)):
     review_id = str(uuid.uuid4())
     code_hash = hash_code(request.code)
@@ -52,6 +52,7 @@ async def create_review(request: ReviewRequest, db: AsyncSession = Depends(get_d
 
         result = await review_graph.ainvoke(initial_state)
         final_report=result.get("final_report")
+
         for agent_name, result_key in [
                 ("bug_detector", "bug_detection_result"),
                 ("quality_checker", "quality_check_result"),
@@ -83,26 +84,38 @@ async def create_review(request: ReviewRequest, db: AsyncSession = Depends(get_d
         logger.error(f"Review {review_id} failed: {e}")
         await update_review_status(db, review_id, ReviewStatus.FAILED)
         await log_error(db, "review_failed", str(e), review_id)
-        raise HTTPException(status_code=500, detail="Review processing failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Review processing failed")
 
 
-@router.get("/review/{review_id}")
+@router.get("/review/{review_id}", status_code=status.HTTP_200_OK)
 async def get_review(review_id: str, db: AsyncSession = Depends(get_db)):
-     review = await get_review_by_id(db, review_id)
-     if not review:
-          raise HTTPException(status_code=404, detail="Review not found")
-     return review
+    
+    try:
+        uuid.UUID(review_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid review ID format")
+    
+    review = await get_review_by_id(db, review_id)
+    if not review:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Review {review_id} not found")
+    return review
 
-@router.get("/history")
-async def get_history(
-    limit: int = 10,
-    offset: int = 0,
-    db: AsyncSession = Depends(get_db)
-):
+
+
+
+@router.get("/history", response_model=HistoryResponse, status_code=status.HTTP_200_OK)
+async def get_history(limit: int = 10, offset: int = 0, db: AsyncSession = Depends(get_db)):
+    if limit < 1 or limit >100:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Limit should be between 1 and 100")
+    if offset< 0: 
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Offset should not be in negative")
+
+
     reviews = await get_review_history(db, limit, offset)
-    return {"reviews": reviews, "limit": limit, "offset": offset}
+    total = await get_review_history_count(db)
+    return HistoryResponse(reviews=reviews, total=total, limit=limit, offset=offset, has_more=(limit + offset) < total)
 
 
-@router.get("/health")
+@router.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
     return{"status" : "healthy", "version" : "0.1.0"}

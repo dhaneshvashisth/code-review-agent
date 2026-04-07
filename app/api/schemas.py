@@ -1,11 +1,19 @@
 from pydantic import BaseModel, field_validator
-from typing import Optional, Any
+from typing import Optional, Any, TypeVar, Generic
 
+T = TypeVar("T")
 
 SUPPORTED_LANGUAGES = [
     "python", "javascript", "typescript", "java", "go",
     "rust", "cpp", "c", "csharp", "ruby", "php", "swift"
 ]
+
+
+class APIResponse(BaseModel, Generic[T]):
+    success: bool
+    message: str
+    data: Optional[T] = None
+    error: Optional[str] = None
 
 class ReviewRequest(BaseModel):
     code : str
@@ -40,3 +48,11 @@ class ReviewHistoryItem(BaseModel):
     overall_score: int
     critical_issues: int
     created_at: str
+
+
+class HistoryResponse(BaseModel):
+    reviews: list[ReviewHistoryItem]
+    total: int
+    limit: int
+    offset: int
+    has_more: bool

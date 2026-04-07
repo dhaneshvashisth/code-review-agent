@@ -171,3 +171,20 @@ async def get_review_history(
     except Exception as e:
         logger.error(f"Failed to fetch history: {e}")
         return []
+    
+
+
+
+async def get_review_history_count(db: AsyncSession) -> int:
+    try:
+        from sqlalchemy import func
+        stmt = (
+            select(func.count())
+            .select_from(ReviewRequest)
+            .where(ReviewRequest.status == ReviewStatus.COMPLETED)
+        )
+        result = await db.execute(stmt)
+        return result.scalar() or 0
+    except Exception as e:
+        logger.error(f"Failed to count reviews: {e}")
+        return 0
