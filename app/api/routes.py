@@ -34,7 +34,8 @@ async def create_review(request: ReviewRequest, db: AsyncSession = Depends(get_d
     return ReviewResponse(
         status="completed",
         message="Review completed successfully",
-        review_id=review_id
+        review_id=review_id,
+        final_report=result.get("final_report")
     )
 
 
